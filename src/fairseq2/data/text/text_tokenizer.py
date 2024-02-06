@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import List, Optional, Sequence
 
 from torch import Tensor
 
@@ -17,7 +17,7 @@ from fairseq2.typing import Device
 
 
 class TextTokenizer(ABC):
-    """Represents a tokenizer to encode and decode sentences."""
+    """Represents a tokenizer to encode and decode text."""
 
     vocab_info: VocabularyInfo
 
@@ -80,13 +80,20 @@ class TextTokenizer(ABC):
 
 
 class TextTokenEncoder(ABC):
-    """Encodes sentences into token indices."""
+    """Encodes text into tokens or token indices."""
 
     @abstractmethod
-    def __call__(self, sentence: StringLike) -> Tensor:
+    def __call__(self, text: StringLike) -> Tensor:
         """
-        :param sentence:
-            The sentence to encode.
+        :param text:
+            The text to encode.
+        """
+
+    @abstractmethod
+    def encode_as_tokens(self, text: StringLike) -> List[StringLike]:
+        """
+        :param text:
+            The text to encode.
         """
 
     @property
@@ -103,11 +110,18 @@ class TextTokenEncoder(ABC):
 
 
 class TextTokenDecoder(ABC):
-    """Decodes sentences from token indices."""
+    """Decodes text from tokens or token indices."""
 
     @abstractmethod
     def __call__(self, token_indices: Tensor) -> StringLike:
         """
         :param token_indices:
             The token indices to decode from.
+        """
+
+    @abstractmethod
+    def decode_from_tokens(self, tokens: Sequence[StringLike]) -> StringLike:
+        """
+        :param tokens:
+            The tokens to decode from.
         """

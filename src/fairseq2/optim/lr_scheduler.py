@@ -18,6 +18,11 @@ from fairseq2.typing import finaloverride
 LRScheduler: TypeAlias = _LRScheduler
 
 
+def get_effective_lr(scheduler: LRScheduler) -> float:
+    """Return the effective learning rate computed by ``scheduler``."""
+    return scheduler.get_last_lr()[0]
+
+
 class LRSchedulerBase(ABC, LRScheduler):
     """Represents the abstract base class for learning rate schedulers."""
 
@@ -25,7 +30,7 @@ class LRSchedulerBase(ABC, LRScheduler):
     def get_lr(self) -> List[float]:  # type: ignore[override]
         if not self._get_lr_called_within_step:  # type: ignore[attr-defined]
             warnings.warn(
-                "To get the last learning rate computed by the scheduler, please use `get_last_lr()`."
+                "To get the last learning rate computed by the scheduler, use `get_last_lr()`."
             )
 
         return self._compute_lrs()
@@ -64,7 +69,6 @@ class NoamLR(LRSchedulerBase):
         num_warmup_steps: int,
         *,
         last_epoch: int = -1,
-        verbose: bool = False,
     ) -> None:
         """
         :param optimizer:
@@ -73,12 +77,10 @@ class NoamLR(LRSchedulerBase):
             The number of warmup steps.
         :param last_epoch:
             The index of the last epoch.
-        :param verbose:
-            If ``True``, prints a message to stdout for each update.
         """
         self.num_warmup_steps = num_warmup_steps
 
-        super().__init__(optimizer, last_epoch, verbose)
+        super().__init__(optimizer, last_epoch)
 
     @finaloverride
     def _compute_lrs(self) -> List[float]:
@@ -128,7 +130,6 @@ class MyleLR(LRSchedulerBase):
         *,
         start_lr: Union[float, Sequence[float]] = 0.0,
         last_epoch: int = -1,
-        verbose: bool = False,
     ) -> None:
         """
         :param optimizer:
@@ -140,8 +141,6 @@ class MyleLR(LRSchedulerBase):
             parameter group respectively.
         :param last_epoch:
             The index of the last epoch.
-        :param verbose:
-            If ``True``, prints a message to stdout for each update.
         """
         if num_warmup_steps == 0:
             raise ValueError("`num_warmup_steps` must be greater than 0.")
@@ -150,7 +149,7 @@ class MyleLR(LRSchedulerBase):
 
         self.start_lrs = _get_per_param_group(optimizer, "start_lr", start_lr)
 
-        super().__init__(optimizer, last_epoch, verbose)
+        super().__init__(optimizer, last_epoch)
 
     @finaloverride
     def _compute_lrs(self) -> List[float]:
@@ -206,7 +205,6 @@ class PolynomialDecayLR(LRSchedulerBase):
         start_lr: Union[float, Sequence[float]] = 0.0,
         final_lr: Union[float, Sequence[float]] = 0.0,
         last_epoch: int = -1,
-        verbose: bool = False,
     ) -> None:
         """
         :param optimizer:
@@ -226,8 +224,6 @@ class PolynomialDecayLR(LRSchedulerBase):
             parameter group respectively.
         :param last_epoch:
             The index of the last epoch.
-        :param verbose:
-            If ``True``, prints a message to stdout for each update.
         """
         if num_warmup_steps >= num_steps:
             raise ValueError(
@@ -241,7 +237,7 @@ class PolynomialDecayLR(LRSchedulerBase):
         self.start_lrs = _get_per_param_group(optimizer, "start_lr", start_lr)
         self.final_lrs = _get_per_param_group(optimizer, "final_lr", final_lr)
 
-        super().__init__(optimizer, last_epoch, verbose)
+        super().__init__(optimizer, last_epoch)
 
     @finaloverride
     def _compute_lrs(self) -> List[float]:
@@ -316,7 +312,6 @@ class CosineAnnealingLR(LRSchedulerBase):
         start_lr: Union[float, Sequence[float]] = 0.0,
         final_lr: Union[float, Sequence[float]] = 0.0,
         last_epoch: int = -1,
-        verbose: bool = False,
     ) -> None:
         """
         :param optimizer:
@@ -338,8 +333,6 @@ class CosineAnnealingLR(LRSchedulerBase):
             parameter group respectively, at the end of the first cycle.
         :param last_epoch:
             The index of the last epoch.
-        :param verbose:
-            If ``True``, prints a message to stdout for each update.
         """
         self.cycle_len = cycle_len
         self.cycle_mul = cycle_mul
@@ -349,7 +342,7 @@ class CosineAnnealingLR(LRSchedulerBase):
         self.start_lrs = _get_per_param_group(optimizer, "start_lr", start_lr)
         self.final_lrs = _get_per_param_group(optimizer, "final_lr", final_lr)
 
-        super().__init__(optimizer, last_epoch, verbose)
+        super().__init__(optimizer, last_epoch)
 
     @finaloverride
     def _compute_lrs(self) -> List[float]:

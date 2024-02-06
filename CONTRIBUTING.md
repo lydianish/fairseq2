@@ -14,11 +14,11 @@ fairseq2n is not available as a pre-built package for your system, please follow
 the installation instructions [here](INSTALL_FROM_SOURCE.md).
 
 For an editable installation, first, install a nightly build of fairseq2n (shown
-for PyTorch `2.1.0` and variant `cu118`):
+for PyTorch `2.2.0` and variant `cu118`):
 
 ```sh
 pip install fairseq2n\
-  --pre --upgrade --extra-index-url https://fair.pkg.atmeta.com/fairseq2/whl/nightly/pt2.1.0/cu118
+  --pre --upgrade --extra-index-url https://fair.pkg.atmeta.com/fairseq2/whl/nightly/pt2.2.0/cu118
 ```
 
 > [!WARNING]
@@ -55,7 +55,7 @@ pip install -r requirements-devel.txt
 > the fairseq2n installation command above to get the most up-to-date binary. If
 > you observe runtime or test failures after the installation, it might be
 > because the latest nightlies are not published yet. If the problem persists
-> after about 12 hours, please create a
+> for more than 12 hours, please create a
 > [GitHub issue](https://github.com/facebookresearch/fairseq2/issues/new/choose).
 
 ## Testing Your Work
@@ -81,7 +81,7 @@ If you have changes in C++ or CUDA, in addition to `pytest`, also run the native
 tests:
 
 ```sh
-fairseq2n/build/tests/run-tests
+native/build/tests/run-tests
 ```
 
 
@@ -117,7 +117,7 @@ If you have made changes to the Python code, run the following command and
 address any issues reported:
 
 ```sh
-mypy . && flake8 .
+mypy && flake8 .
 ```
 
 ### C++
@@ -125,7 +125,7 @@ If you have touched C++ or CUDA files, lint your code with an up-to-date version
 of the clang toolkit and address any issues reported:
 
 ```sh
-cd fairseq2n
+cd native
 
 CC=clang CXX=clang++ cmake -GNinja -DFAIRSEQ2N_RUN_CLANG_TIDY=ON -B build
 
@@ -135,7 +135,7 @@ cmake --build build
 Alternatively:
 
 ```sh
-cd fairseq2n
+cd native
 
 CC=clang CXX=clang++ cmake -GNinja -B build
 
@@ -153,14 +153,14 @@ isort . && black .
 ```
 
 ### C++
-For C++ and CUDA , we do not enforce our coding conventions via a tool (e.g.
+For C++ and CUDA, we do not enforce our coding conventions via a tool (e.g.
 clang-format), but we expect you to follow them. You can check out any C++ file
 in our code base to study our conventions. Since C++ syntax can become pretty
 complex at times, refrain from being too pedantic and prioritize readability
 over convention.
 
 
-## Check List For Pull Requests
+## Check List for Pull Requests
 1. Fork the repository and create your branch from `main`.
 2. If you've added code that should be tested, add tests, and ensure the entire
    test suite passes.
@@ -171,7 +171,7 @@ over convention.
 
 ## Contributor License Agreement ("CLA")
 In order to accept your pull request, we need you to submit a CLA. You only need
-to do this once to work on any of Facebook's open source projects.
+to do this once to work on any of Facebook's open-source projects.
 
 Complete your CLA here: <https://code.facebook.com/cla>
 

@@ -5,16 +5,21 @@
 # LICENSE file in the root directory of this source tree.
 
 from dataclasses import dataclass
-from typing import Optional
+from functools import partial
+from typing import List, Optional, Tuple
+
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
 from fairseq2.data import VocabularyInfo
+from fairseq2.gang import Gang
 from fairseq2.models.transformer import (
     TransformerEmbeddingFrontend,
     TransformerFrontend,
     TransformerModel,
 )
-from fairseq2.models.utils.arch_registry import ArchitectureRegistry
+from fairseq2.models.utils import ArchitectureRegistry
 from fairseq2.nn.embedding import Embedding, StandardEmbedding, init_scaled_embedding
+from fairseq2.nn.fsdp import FSDPWrapPolicy
 from fairseq2.nn.position_encoder import SinusoidalPositionEncoder
 from fairseq2.nn.projection import TiedProjection
 from fairseq2.nn.transformer import (
@@ -70,8 +75,7 @@ class NllbConfig:
 
 nllb_archs = ArchitectureRegistry[NllbConfig]("nllb")
 
-
-nllb_arch = nllb_archs.marker
+nllb_arch = nllb_archs.decorator
 
 
 @nllb_arch("dense_1b")
@@ -146,7 +150,7 @@ class NllbBuilder:
     ) -> None:
         """
         :param config:
-            The configuration to use.
+            The configuration.
         :param device:
             The device on which to initialize modules.
         :param dtype:
@@ -192,7 +196,7 @@ class NllbBuilder:
         pos_encoder = SinusoidalPositionEncoder(
             self.config.model_dim,
             self.config.max_seq_len,
-            _legacy_pad_idx=self.config.vocab_info.pad_idx,
+            _legacy_pad_idx=1,
             device=self.device,
         )
 
@@ -296,10 +300,31 @@ def create_nllb_model(
     """Create an NLLB model.
 
     :param config:
-        The configuration to use.
+        The configuration.
     :param device:
         The device on which to initialize modules.
     :param dtype:
         The data type of module parameters and buffers.
     """
     return NllbBuilder(config, device=device, dtype=dtype).build_model()
+
+
+def get_nllb_wrap_policy(
+    model_config: NllbConfig, gang: Gang
+) -> Tuple[Optional[FSDPWrapPolicy], Optional[List[str]]]:
+    """Return the FSDP wrap policy and ignored parameter names for ``arch_name``.
+
+    :param model_config:
+        The model configuration.
+    :param gang:
+        The gang that will be used to shard the model.
+
+    :returns:
+        - The FSDP wrap policy.
+        - The ignored parameter names. Can contain regular expressions.
+    """
+    kls = (TransformerEncoder, TransformerDecoder)
+
+    wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=kls)
+
+    return wrap_policy, None

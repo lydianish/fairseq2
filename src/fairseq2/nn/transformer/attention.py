@@ -18,24 +18,12 @@ from torch.nn.functional import dropout, softmax
 from fairseq2.nn.padding import PaddingMask
 from fairseq2.nn.transformer.attention_mask import AttentionMask, CausalAttentionMask
 from fairseq2.typing import finaloverride
-from fairseq2.utils.version import is_pt2_or_greater
 
 logger = logging.getLogger(__name__)
 
 
 class SDPA(Module, ABC):
     """Computes scaled dot-product attention."""
-
-    attn_dropout_p: float
-
-    def __init__(self, *, attn_dropout_p: float = 0.0) -> None:
-        """
-        :param attn_dropout_p:
-            The dropout probability on attention weights.
-        """
-        super().__init__()
-
-        self.attn_dropout_p = attn_dropout_p
 
     @abstractmethod
     def forward(
@@ -84,22 +72,23 @@ class SDPA(Module, ABC):
               key/value sequence length.
         """
 
-    def extra_repr(self) -> str:
-        """:meta private:"""
-        return f"attn_dropout_p={self.attn_dropout_p}"
-
 
 @final
 class TorchSDPA(SDPA):
     """Computes scaled dot-product attention using PyTorch SDPA v2."""
 
-    def __init__(self, *, attn_dropout_p: float = 0.0) -> None:
-        super().__init__(attn_dropout_p=attn_dropout_p)
+    attn_dropout_p: float
 
-        if not is_pt2_or_greater():
-            raise ValueError("`TorchSDPA` requires PyTorch 2.0.0 or greater.")
+    def __init__(self, *, attn_dropout_p: float = 0.0) -> None:
+        """
+        :param attn_dropout_p:
+            The dropout probability on attention weights.
+        """
+        super().__init__()
 
         self._has_warned = False
+
+        self.attn_dropout_p = attn_dropout_p
 
     @finaloverride
     def forward(
@@ -112,23 +101,9 @@ class TorchSDPA(SDPA):
         attn_mask: Optional[AttentionMask] = None,
         needs_weights: bool = False,
     ) -> Tuple[Tensor, Optional[Tensor]]:
-        if not seqs.is_cuda:
-            return _naive_scaled_dot_product_attention(
-                seqs,
-                keys,
-                key_padding_mask,
-                values,
-                attn_mask,
-                self.attn_dropout_p,
-                needs_weights,
-                self.training,
-            )
-
         if needs_weights:
             if not self._has_warned:
-                logger.warning(
-                    "`TorchSDPA` has to fall back to the naive SDPA implementation because of `needs_weights` set to `True`."
-                )
+                logger.warning("`TorchSDPA` has to fall back to the naive SDPA implementation because of `needs_weights` set to `True`.")  # fmt: skip
 
                 self._has_warned = True
 
@@ -167,7 +142,7 @@ class TorchSDPA(SDPA):
                 mask = torch.where(mask, m, -torch.inf)
         elif isinstance(attn_mask, CausalAttentionMask):
             # PyTorch SDPA supports only full causal attention.
-            if attn_mask.attn_window_len is None:
+            if attn_mask.attn_len is None and attn_mask.attn_window_len is None:
                 mask = None
 
                 is_causal = True
@@ -191,10 +166,25 @@ class TorchSDPA(SDPA):
 
         return attn, None
 
+    def extra_repr(self) -> str:
+        """:meta private:"""
+        return f"attn_dropout_p={self.attn_dropout_p}"
+
 
 @final
 class NaiveSDPA(SDPA):
-    """Computes scaled dot-product attention using a non-fused implementation."""
+    """Computes scaled dot-product attention using a Python implementation."""
+
+    attn_dropout_p: float
+
+    def __init__(self, *, attn_dropout_p: float = 0.0) -> None:
+        """
+        :param attn_dropout_p:
+            The dropout probability on attention weights.
+        """
+        super().__init__()
+
+        self.attn_dropout_p = attn_dropout_p
 
     @finaloverride
     def forward(
@@ -217,6 +207,10 @@ class NaiveSDPA(SDPA):
             needs_weights,
             self.training,
         )
+
+    def extra_repr(self) -> str:
+        """:meta private:"""
+        return f"attn_dropout_p={self.attn_dropout_p}"
 
 
 def _naive_scaled_dot_product_attention(
@@ -275,21 +269,14 @@ class SDPAFactory(Protocol):
 
 
 def _get_fallback_sdpa_factory() -> SDPAFactory:
-    if is_pt2_or_greater():
-        return TorchSDPA
-    else:
-        return NaiveSDPA
+    return TorchSDPA
 
 
 _sdpa_factory: SDPAFactory = _get_fallback_sdpa_factory()
 
 
-def set_default_sdpa(factory: Optional[SDPAFactory]) -> None:
-    """Set the process-wide default scaled dot-product attention module.
-
-    If ``None``, defaults to :class:`TorchSDPA` if available; otherwise, to
-    :class:`NaiveSDPA`.
-    """
+def set_default_sdpa_factory(factory: Optional[SDPAFactory]) -> None:
+    """Set the default :class:`SDPA` factory."""
     global _sdpa_factory
 
     if factory is not None:
@@ -298,23 +285,23 @@ def set_default_sdpa(factory: Optional[SDPAFactory]) -> None:
         _sdpa_factory = _get_fallback_sdpa_factory()
 
 
-@contextmanager
-def sdpa(factory: Optional[SDPAFactory]) -> Generator[None, None, None]:
-    """Set a temporary default scaled dot-product attention module."""
-    original_factory = _sdpa_factory
-
-    set_default_sdpa(factory)
-
-    try:
-        yield
-    finally:
-        set_default_sdpa(original_factory)
-
-
 def create_default_sdpa(*, attn_dropout_p: float = 0.0) -> SDPA:
-    """Create an instance of the default scaled dot-product attention module.
+    """Create an instance of the default :class:`SDPA`.
 
     :param attn_dropout_p:
         The dropout probability on attention weights.
     """
     return _sdpa_factory(attn_dropout_p=attn_dropout_p)
+
+
+@contextmanager
+def default_sdpa_factory(factory: Optional[SDPAFactory]) -> Generator[None, None, None]:
+    """Set a temporary default :class:`SDPA` factory."""
+    original_factory = _sdpa_factory
+
+    set_default_sdpa_factory(factory)
+
+    try:
+        yield
+    finally:
+        set_default_sdpa_factory(original_factory)

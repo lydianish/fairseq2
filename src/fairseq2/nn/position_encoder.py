@@ -17,7 +17,7 @@ from torch.nn.parameter import Parameter
 
 from fairseq2.nn.incremental_state import IncrementalStateBag
 from fairseq2.nn.padding import PaddingMask
-from fairseq2.typing import DataType, Device, finaloverride
+from fairseq2.typing import META, DataType, Device, finaloverride
 
 
 class PositionEncoder(Module, ABC):
@@ -66,7 +66,7 @@ class PositionEncoder(Module, ABC):
             if self.training or state_bag is None:
                 start_step = 0
             else:
-                start_step = state_bag.step
+                start_step = state_bag.step_nr
 
             if (seq_len := start_step + seqs.size(-2)) > self.max_seq_len:
                 raise ValueError(
@@ -232,7 +232,7 @@ class SinusoidalPositionEncoder(PositionEncoder):
         if self.training or state_bag is None:
             start_step = 0
         else:
-            start_step = state_bag.step
+            start_step = state_bag.step_nr
 
         fp32_seqs = seqs.float() + self.freqs[start_step : start_step + seq_len]
 
@@ -294,7 +294,7 @@ class LearnedPositionEncoder(PositionEncoder):
         if self.training or state_bag is None:
             start_step = 0
         else:
-            start_step = state_bag.step
+            start_step = state_bag.step_nr
 
         steps = torch.arange(
             start_step, start_step + seq_len, device=seqs.device, dtype=torch.int64
@@ -344,7 +344,7 @@ class RotaryEncoder(PositionEncoder):
 
         # As of PyTorch 2.0, `torch.polar` does not support meta device, but we
         # do not want to lose benefit of lazy initialization.
-        if device.type == "meta":
+        if device == META:
             return
 
         # (S)
@@ -376,7 +376,7 @@ class RotaryEncoder(PositionEncoder):
         if self.training or state_bag is None:
             start_step = 0
         else:
-            start_step = state_bag.step
+            start_step = state_bag.step_nr
 
         # (*, S, E) -> (*, S, E / 2, 2)
         seqs = seqs.unflatten(-1, (-1, 2))

@@ -4,12 +4,15 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations
+
 from typing import Any, Optional, Sequence, Tuple, cast
 
 import torch
 from torch import Tensor
 
 from fairseq2.data import Collater, SequenceData
+from fairseq2.typing import Device
 
 
 class PaddingMask:
@@ -19,8 +22,6 @@ class PaddingMask:
     batch_seq_len: int
 
     materialized: Optional[Tensor]
-    """The boolean padding mask tensor. Will be ``None`` till the first call to
-    :method:`materialize`."""
 
     def __init__(self, seq_lens: Tensor, batch_seq_len: int) -> None:
         """
@@ -49,6 +50,17 @@ class PaddingMask:
             The amount by which to trim the sequences.
         """
         return PaddingMask(self.seq_lens - size, self.batch_seq_len - size)
+
+    def to(self, device: Device) -> PaddingMask:
+        """Perform device conversion.
+
+        :param device:
+            The target device.
+        """
+        if self.seq_lens.device == device:
+            return self
+
+        return PaddingMask(self.seq_lens.to(device), self.batch_seq_len)
 
 
 def to_padding_mask(seq_lens: Tensor, batch_seq_len: int) -> Tensor:
@@ -105,7 +117,7 @@ def apply_padding_mask(
 
 
 def get_seqs_and_padding_mask(
-    data: SequenceData,
+    data: SequenceData, device: Optional[Device] = None
 ) -> Tuple[Tensor, Optional[PaddingMask]]:
     """Return the sequences along with their padding mask from ``data``.
 
@@ -115,10 +127,18 @@ def get_seqs_and_padding_mask(
     """
     seqs = data["seqs"]
 
+    if device is not None:
+        seqs = seqs.to(device)
+
     if not data["is_ragged"]:
         return seqs, None
 
-    return seqs, PaddingMask(data["seq_lens"], batch_seq_len=seqs.size(1))
+    seq_lens = data["seq_lens"]
+
+    if device is not None:
+        seq_lens = seq_lens.to(device)
+
+    return seqs, PaddingMask(seq_lens, batch_seq_len=seqs.size(1))
 
 
 def pad_seqs(

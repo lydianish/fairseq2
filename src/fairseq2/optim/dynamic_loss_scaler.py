@@ -4,12 +4,14 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
+from __future__ import annotations
+
 import logging
 import math
 from dataclasses import dataclass
-from logging import Logger
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple, cast
 
+import torch
 from torch import Tensor
 from torch.cuda.amp.grad_scaler import GradScaler
 from torch.distributed.fsdp.sharded_grad_scaler import ShardedGradScaler
@@ -17,18 +19,18 @@ from torch.optim import Optimizer
 
 from fairseq2.gang import Gang
 
+logger = logging.getLogger(__name__)
+
 
 class DynamicLossScaler:
     """Performs loss scaling during backward pass to prevent underflow of half
     precision gradients."""
 
     optimizer: Optimizer
-    gang: Gang
     init_scale: float
     scale_factor: float
     scale_window: int
     min_scale: float
-    logger: Optional[Logger]
     enabled: bool
 
     _grad_scaler: GradScaler
@@ -42,7 +44,6 @@ class DynamicLossScaler:
         scale_factor: float = 2.0,
         scale_window: int = 2000,
         min_scale: float = 0.0,
-        logger: Optional[Logger] = None,
         enabled: bool = True,
     ) -> None:
         """
@@ -60,11 +61,22 @@ class DynamicLossScaler:
             that must occur for the scale to be multiplied by ``scale_factor``.
         :param min_scale:
             The minimum allowed scale.
-        :param logger:
-            The logger to use to output diagnostic messages.
         :param enabled:
             If ``False``, disables loss scaling.
         """
+        if enabled:
+            for group in optimizer.param_groups:
+                for param in group["params"]:
+                    if param.dtype != torch.float16:
+                        raise ValueError(
+                            f"The parameters held by `optimizer` must be of type `torch.float16`, but at least one parameter is of type `{param.dtype}`."
+                        )
+
+                    if param.device.type != "cuda":
+                        raise ValueError(
+                            f"The parameters held by `optimizer` must be on a CUDA device, but at least one parameter is on a {param.device.type.upper()} device."
+                        )
+
         if gang.size == 1:
             self._grad_scaler = GradScaler(
                 init_scale, scale_factor, 1 / scale_factor, scale_window, enabled
@@ -82,21 +94,26 @@ class DynamicLossScaler:
         self.scale_factor = scale_factor
         self.scale_window = scale_window
         self.min_scale = min_scale
-        self.gang = gang
-        self.logger = logger
         self.enabled = enabled
 
     def state_dict(self) -> Dict[str, Any]:
         return {"grad_scaler": self._grad_scaler.state_dict()}
 
     def load_state_dict(self, state_dict: Mapping[str, Any]) -> None:
-        self._grad_scaler.load_state_dict(state_dict["grad_scaler"])
+        try:
+            self._grad_scaler.load_state_dict(state_dict["grad_scaler"])
+        except KeyError as ex:
+            raise ValueError(
+                "`state_dict` must contain the state of the internal `GradScaler`."
+            ) from ex
 
     def run_optimizer_step(
-        self, closure: Optional[Callable[[], float]] = None
+        self, step_nr: int, closure: Optional[Callable[[], float]] = None
     ) -> Tuple[Optional[float], "LossScaleResult"]:
         """Perform a single optimization step.
 
+        :param step_nr:
+            The number of the training step. Used for logging purposes.
         :param closure:
             A closure that reevaluates the model and returns the loss. Optional
             for most optimizers.
@@ -110,7 +127,7 @@ class DynamicLossScaler:
             # calling `unscale_()` for optimizers that natively support gradient
             # scaling. Although this is the expected behavior for `GradScaler`,
             # in distributed settings this causes the scale to get out-of-sync
-            # between ranks. Here we force ranks to sync their inf/NaNs by
+            # between processes. Here we force ranks to sync their inf/NaNs by
             # manually calling `unscale_()`.
             try:
                 self._grad_scaler.unscale_(self.optimizer)  # type: ignore[arg-type]
@@ -120,9 +137,9 @@ class DynamicLossScaler:
 
         loss = self._grad_scaler.step(self.optimizer, closure)
 
-        return loss, self._update_scale()
+        return loss, self._update_scale(step_nr)
 
-    def _update_scale(self) -> "LossScaleResult":
+    def _update_scale(self, step_nr: int) -> LossScaleResult:
         old_scale = self._grad_scaler.get_scale()
 
         self._grad_scaler.update()
@@ -132,11 +149,8 @@ class DynamicLossScaler:
         if self._are_close(old_scale, new_scale):
             return LossScaleResult(old_scale, new_scale)
 
-        # fmt: off
         if new_scale > old_scale:
-            self._log(logging.INFO,
-                "No gradient overflow detected in the last %s step(s), increasing loss scale from %s to %s.", self.scale_window, old_scale, new_scale
-            )
+            logger.info("No gradient overflow detected in the last %s step(s) after step %d, increasing loss scale from %s to %s.", self.scale_window, step_nr, old_scale, new_scale)  # fmt: skip
 
             return LossScaleResult(old_scale, new_scale)
 
@@ -144,24 +158,17 @@ class DynamicLossScaler:
             self._grad_scaler.update(self.min_scale)
 
             if self._are_close(old_scale, self.min_scale):
-                self._log(logging.WARNING,
-                    "Overflow detected, ignoring gradient, loss scale is already at minimum (%s). Your loss is probably exploding. Try lowering the learning rate, using gradient clipping, or increasing the batch size.", self.min_scale
-                )
-
-                return LossScaleResult(old_scale, new_scale, overflow=True, min_=True)
+                logger.warning("Overflow detected at step %d, ignoring gradient, loss scale is already at minimum (%s). Your loss is probably exploding. Try lowering the learning rate, using gradient clipping, or increasing the batch size.", step_nr, self.min_scale)  # fmt: skip
             else:
-                self._log(logging.WARNING,
-                    "Overflow detected, ignoring gradient, decreasing loss scale from %s to %s (minimum). Your loss is probably exploding. Try lowering the learning rate, using gradient clipping, or increasing the batch size.", old_scale, self.min_scale
-                )
+                logger.warning("Overflow detected at step %d, ignoring gradient, decreasing loss scale from %s to %s (minimum). Your loss is probably exploding. Try lowering the learning rate, using gradient clipping, or increasing the batch size.", step_nr, old_scale, self.min_scale)  # fmt: skip
 
-                return LossScaleResult(old_scale, new_scale, overflow=True, min_=True)
-        else:
-            self._log(logging.INFO,
-                "Overflow detected, ignoring gradient, decreasing loss scale from %s to %s.", old_scale, new_scale
+            return LossScaleResult(
+                old_scale, new_scale, overflow=True, min_reached=True
             )
+        else:
+            logger.info("Overflow detected at step %d, ignoring gradient, decreasing loss scale from %s to %s.", step_nr, old_scale, new_scale)  # fmt: skip
 
             return LossScaleResult(old_scale, new_scale, overflow=True)
-        # fmt: on
 
     @staticmethod
     def _are_close(a: float, b: float) -> bool:
@@ -177,11 +184,7 @@ class DynamicLossScaler:
 
     def get_scale(self) -> float:
         """Return the current scale, or 1.0 if loss scaling is disabled."""
-        return cast(float, self._grad_scaler.get_scale())
-
-    def _log(self, level: int, msg: str, *args: Any) -> None:
-        if self.logger:
-            self.logger.log(level, msg, *args)
+        return cast(float, self._grad_scaler.get_scale())  # type: ignore[redundant-cast]
 
 
 @dataclass
@@ -195,7 +198,7 @@ class LossScaleResult:
     """The scale after the optimizer step."""
 
     overflow: bool = False
-    """Indicates whether the loss has overflowed."""
+    """If ``True``, the loss has overflowed."""
 
-    min_: bool = False
-    """Indicates whether the scale has been decreased to its minimum value."""
+    min_reached: bool = False
+    """If ``True``, the scale has been decreased to its minimum value."""
